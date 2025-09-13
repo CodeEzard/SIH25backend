@@ -13,6 +13,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+
+	"github.com/skip2/go-qrcode"
 )
 var secretkey []byte
 
@@ -100,4 +102,9 @@ func VerifySignature(address, message, sigHex string) (bool, error) {
 func hexToBytes(hexStr string) []byte {
 	b, _ := hex.DecodeString(strings.TrimPrefix(hexStr, "0x"))
 	return b
+}
+
+// GenerateQRCode generates a PNG QR code for the given credential ID or URL
+func GenerateQRCode(data string, filename string) error {
+    return qrcode.WriteFile(data, qrcode.Medium, 256, filename)
 }

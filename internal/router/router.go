@@ -27,6 +27,7 @@ func RegisterRouter() http.Handler {
 	r.Post("/showuser", handlers.SearchUser)
 	r.Post("/usercreds", handlers.ShowSearchedUserCreds)
 	r.Get("/transactions", handlers.ShowAllTransactions)
+	r.Get("/credential/{id}/qrcode", handlers.GetCredentialQRCode)
 	r.Get("/kaithheathcheck", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
