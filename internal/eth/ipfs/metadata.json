@@ -1,0 +1,58 @@
+{
+  "name": "BTECH",
+  "description": "Official academic credential awarded by Example University for the successful completion of the Bachelor of Science in Computer Science program.",
+  "attributes": [
+    {
+      "trait_type": "Credential Type",
+      "value": "Bachelor's Degree"
+    },
+    {
+      "trait_type": "Issuing Institution",
+      "value": "Example University"
+    },
+    {
+      "trait_type": "Issuer Wallet",
+      "value": "0xUniversityOfficialWalletAddress12345"
+    },
+    {
+      "trait_type": "Recipient Name",
+      "value": "John Doe"
+    },
+    {
+      "trait_type": "Recipient Wallet",
+      "value": "0xStudentWalletAddressABCDEF"
+    },
+    {
+      "trait_type": "Issue Date",
+      "value": "2024-05-15"
+    },
+    {
+      "trait_type": "Graduation Date",
+      "value": "2024-05-15"
+    },
+    {
+      "trait_type": "Major",
+      "value": "Computer Science"
+    },
+    {
+      "trait_type": "GPA",
+      "value": "3.85"
+    },
+    {
+      "trait_type": "Credential ID",
+      "value": "EXU-CS-BS-12345-2024"
+    },
+    {
+      "trait_type": "Accreditation Body",
+      "value": "Accreditation Council for Education (ACE)"
+    },
+    {
+      "trait_type": "Program Details",
+      "value": "ipfs://QmProgramDetailsHash/bs_cs_curriculum.json"
+    }
+  ],
+  "custom_fields": {
+    "deanSignatureHash": "QmDeanSignatureHashForThisCredential",
+    "facultyAdvisor": "Dr. Alan Turing"
+  }
+}
