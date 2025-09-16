@@ -15,7 +15,7 @@ var DB *gorm.DB
 
 func Init() {
 	// Use the provided managed PostgreSQL connection string directly
-	dsn := "postgresql://ikvvhzvdwblfanaplwtv:skogjnwlomkhojmbhptqsbwdgjhofd@9qasp5v56q8ckkf5dc.leapcellpool.com:6438/bieoohmpqpdwdkumqegq?sslmode=require"
+	dsn := "host=localhost user=postgres password=8118 dbname=vericred port=5432 sslmode=disable TimeZone=Asia/Kolkata"
 
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
