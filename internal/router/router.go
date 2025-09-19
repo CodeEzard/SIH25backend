@@ -17,8 +17,7 @@ func RegisterRouter() http.Handler {
 	r.Use(middleware.CORSMiddleware)
 	r.Use(middleware.LoggingMiddleware)
 	// Health-style GET for proxies expecting a GET at /getnonce
-	r.Get("/getnonce", handlers.GetNonceHealth)
-	// Actual nonce creation (POST)
+	r.Get("/getnonce", handlers.GetNonce)
 	r.Post("/getnonce", handlers.GetNonce)
 	r.Post("/auth/metamasklogin", handlers.LoginInMetamask)
 	r.Get("/universities", handlers.AllOrgs)
@@ -34,7 +33,7 @@ func RegisterRouter() http.Handler {
 	// pending request (public create by student via body wallets)
 	r.Post("/api/pending/request", handlers.CreatePendingRequest)
 	r.Post("/api/specific-university", handlers.SpecificUniversity)
-
+	r.Post("/api/upload-bulk", handlers.UploadFile)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthMiddleware)
 		r.Post("/api/create/user", handlers.CreateUser)
