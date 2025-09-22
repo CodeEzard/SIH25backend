@@ -1,0 +1,9 @@
+student_name,roll_number,program,major,batch_year,issued_date,graduation_date
+Alice Johnson,RN-0001,B.Tech,Computer Science,2022,2022-06-15,2026-05-30
+Bob Lee,RN-0002,B.Sc.,Mathematics,2021,2021-05-01,2025-05-15
+Carol Danvers,RN-0003,M.Tech,Electrical Engineering,2020,2020-01-10,2024-07-01
+David Kim,RN-0004,B.A.,Economics,2019,,
+Eve Adams,RN-0005,B.Com,,2018,2018-07-21,
+Frank Wright,RN-0006,Bachelor of Science,Physics,2023,,2027-06-01
+Grace Hopper,RN-0007,Master of Science,Computer Science,2022,2022-08-30,2024-12-15
+Henry Ford,RN-0008,Bachelor of Arts,History,2020,,

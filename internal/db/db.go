@@ -54,6 +54,9 @@ func Init() {
 	if err = DB.AutoMigrate(&models.Transaction{}); err != nil {
 		log.Fatal("AutoMigration failed for Transaction: ", err)
 	}
+	if err = DB.AutoMigrate(&models.LegacyCredential{}); err != nil {
+		log.Fatal("AutoMigration failed for LegacyCredential: ", err)
+	}
 
 	// AutoMigrate already manages FKs from struct tags; no need to create constraints manually
 }

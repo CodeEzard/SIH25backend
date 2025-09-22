@@ -116,3 +116,22 @@ type Transaction struct {
 	GasPrice      string    `gorm:"not null" json:"gas_price"`
 	Timestamp     time.Time `gorm:"not null" json:"timestamp"`
 }
+
+// LegacyCredential represents historical student records imported via CSV.
+// It links to the university via UniversityID (organizations table).
+// Dates use YYYY-MM-DD format for CSV (IssuedDate) and GraduationDate kept as string if not precise.
+// Uses UUID as primary key generated in Postgres.
+type LegacyCredential struct {
+	ID              string        `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	StudentName     string        `gorm:"not null;size:255" json:"student_name"`
+	RollNumber      string        `gorm:"not null;size:100;index" json:"roll_number"`
+	Program         string        `gorm:"size:255" json:"program"`
+	Major           string        `gorm:"size:255" json:"major"`
+	BatchYear       int           `json:"batch_year"`
+	IssuedDate      *time.Time    `json:"issued_date"`
+	GraduationDate  string        `gorm:"size:50" json:"graduation_date"`
+	UniversityID    uint          `gorm:"not null;index" json:"university_id"`
+	University      Organization  `gorm:"foreignKey:UniversityID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	CreatedAt       time.Time     `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt       time.Time     `gorm:"autoUpdateTime" json:"updated_at"`
+}
