@@ -57,7 +57,7 @@ func LoginInMetamask(w http.ResponseWriter, r *http.Request) {
 
     acc := models.Accounts{
         MetamaskAddress: metamaskAddress,
-        AccountType:     "user",
+        AccountType:     "unknown", // defer role until profile creation
     }
 
     var existingAcc models.Accounts

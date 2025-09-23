@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -13,79 +13,32 @@ import (
 	"gorm.io/gorm"
 )
 
-
 func CreateUniversity(w http.ResponseWriter, r *http.Request) {
-
+	log.Println("CreateUniversity called")
 	var body map[string]any
-    err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		fmt.Println("Error:", err)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	acad_email, ok := body["AcadEmail"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing AcadEmail", http.StatusBadRequest)
-		return
-	}
-	org_name, ok := body["OrgName"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing OrgName", http.StatusBadRequest)
-		return
-	}
-	org_type, ok := body["OrgType"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing OrgType", http.StatusBadRequest)
-		return
-	}
-	org_url, ok := body["OrgUrl"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing OrgUrl", http.StatusBadRequest)
-		return
-	}
-	org_desc, ok := body["OrgDesc"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing OrgDesc", http.StatusBadRequest)
-		return
-	}
-	country, ok := body["Country"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing Country", http.StatusBadRequest)
-		return
-	}
-	state, ok := body["State"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing State", http.StatusBadRequest)
-		return
-	}
-	city, ok := body["City"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing City", http.StatusBadRequest)
-		return
-	}
-	total_students, ok := body["TotalStudents"].(string) // Expecting a string
-	if !ok {
-		http.Error(w, "Invalid or missing TotalStudents", http.StatusBadRequest)
-		return
-	}
+	acad_email, _ := body["AcadEmail"].(string)
+	org_name, _ := body["OrgName"].(string)
+	org_type, _ := body["OrgType"].(string)
+	org_url, _ := body["OrgUrl"].(string)
+	org_desc, _ := body["OrgDesc"].(string)
+	country, _ := body["Country"].(string)
+	state, _ := body["State"].(string)
+	city, _ := body["City"].(string)
+	total_students_str, _ := body["TotalStudents"].(string)
+	address, _ := body["Address"].(string)
+	postal_code, _ := body["PostalCode"].(string)
 
-	students, err := strconv.Atoi(total_students) // Convert string to int
-	if err != nil {
-		http.Error(w, "TotalStudents must be a valid integer", http.StatusBadRequest)
-		return
+	students := 0
+	if total_students_str != "" {
+		if v, err := strconv.Atoi(total_students_str); err == nil {
+			students = v
+		}
 	}
-	
-	address, ok := body["Address"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing Address", http.StatusBadRequest)
-		return
-	}
-	postal_code, ok := body["PostalCode"].(string)
-	if !ok {
-		http.Error(w, "Invalid or missing PostalCode", http.StatusBadRequest)
-		return
-	}
-
 
 	metamaskAddress, ok := r.Context().Value(middleware.MetamaskAddressKey).(string)
 	if !ok || metamaskAddress == "" {
@@ -93,52 +46,79 @@ func CreateUniversity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org := models.Organization{
-		MetamaskAddress: metamaskAddress,
-		AcadEmail: acad_email,
-		OrgName: org_name,
-		OrgType: org_type,
-		OrgUrl: org_url,
-		OrgDesc: org_desc,
-		Country: country,
-		State: state,
-		City: city,
-		TotalStudents: students,
-		Address: address,
-		PostalCode: postal_code,
+	// Block if this wallet already has a student profile
+	var existingUser models.Users
+	if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&existingUser).Error; err == nil && existingUser.ID != 0 {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":        "account_conflict",
+			"message":      "Wallet already registered as a student. Use a different wallet to create a university account.",
+			"account_type": "student",
+		})
+		return
 	}
 
-	
-	res := db.DB.Where("metamask_address = ?", metamaskAddress).First(&org)
+	// If org already exists for this wallet, return it (idempotent)
+	var existingOrg models.Organization
+	err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&existingOrg).Error
+	if err == nil {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"account_type": "university",
+			"organization": existingOrg,
+			"authStatus": map[string]any{
+				"isAuthenticated": true,
+				"accountType":    "university",
+			},
+		})
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
 
-	if res.Error == gorm.ErrRecordNotFound {
-		org.IsVerified = true
-		createResult := db.DB.Create(&org)
-        if createResult.Error != nil {
-            http.Error(w, "Failed to create account", http.StatusInternalServerError)
-            return
-        }
-		
-		var account models.Accounts
+	org := models.Organization{
+		MetamaskAddress: metamaskAddress,
+		AcadEmail:       acad_email,
+		OrgName:         org_name,
+		OrgType:         org_type,
+		OrgUrl:          org_url,
+		OrgDesc:         org_desc,
+		Country:         country,
+		State:           state,
+		City:            city,
+		TotalStudents:   students,
+		Address:         address,
+		PostalCode:      postal_code,
+	}
+	if err := db.DB.Create(&org).Error; err != nil {
+		http.Error(w, "failed to create organization", http.StatusInternalServerError)
+		return
+	}
 
-		if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&account).Error; err != nil {
-			log.Fatalf("account not found: %v", err)
-		}
+	// Update account to point to this organization
+	var account models.Accounts
+	if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&account).Error; err != nil {
+		http.Error(w, "account not found for wallet", http.StatusInternalServerError)
+		return
+	}
+	account.OwnerID = org.ID
+	account.OwnerType = "university"
+	account.AccountType = "university"
+	if err := db.DB.Save(&account).Error; err != nil {
+		http.Error(w, "failed to update account", http.StatusInternalServerError)
+		return
+	}
 
-		account.OwnerID = org.ID
-		account.OwnerType = "university"
-
-		if err := db.DB.Save(&account).Error; err != nil {
-			log.Fatalf("Failed to update account: %v", err)
-		}
-	
-	} else if res.Error != nil {
-        http.Error(w, "Database error", http.StatusInternalServerError)
-        return
-    }
-	
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(org)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"account_type": "university",
+		"organization": org,
+		"authStatus": map[string]any{
+			"isAuthenticated": true,
+			"accountType":    "university",
+		},
+	})
 }
 
 func ShowOrg(w http.ResponseWriter, r *http.Request) {
@@ -149,63 +129,49 @@ func ShowOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	var org models.Organization
 	res := db.DB.Where("metamask_address = ?", metamaskAddress).First(&org)
-	if res.Error == gorm.ErrRecordNotFound {
-		fmt.Println("inside not found university")
+	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
 		return
 	} else if res.Error != nil {
-		fmt.Println("Database error")
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "database error", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(org)
+	_ = json.NewEncoder(w).Encode(org)
 }
 
 func AllOrgs(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Allorgs function called.")
 	var orgs []models.Organization
-	result := db.DB.Limit(10).Find(&orgs) 
+	result := db.DB.Limit(10).Find(&orgs)
 	if result.Error != nil {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
 		return
-	} 
-	json.NewEncoder(w).Encode(orgs)
-	// for _, org := range orgs {
-	// 	fmt.Printf("Organization: %+v\n", org)
-	// 
+	}
+	_ = json.NewEncoder(w).Encode(orgs)
 }
 
 func SpecificUniversity(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
-	err := json.NewDecoder(r.Body).Decode(&body)
-	
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	address, ok := body["metamask_address"].(string)
-
 	if !ok || address == "" {
 		http.Error(w, "Invalid or missing metamask_address", http.StatusBadRequest)
 		return
 	}
-
 	var org models.Organization
-	
 	res := db.DB.Raw("SELECT * FROM organizations WHERE metamask_address = ?", address).Scan(&org)
-	
-	if res.Error == gorm.ErrRecordNotFound {
+	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
 		return
 	} else if res.Error != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-	fmt.Print(org)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(org)
+	_ = json.NewEncoder(w).Encode(org)
 }

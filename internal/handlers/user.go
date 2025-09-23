@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"vericred/internal/db"
@@ -14,14 +13,17 @@ import (
 )
 
 func CreateUser(w http.ResponseWriter, r *http.Request) {
-	log.Println("CreateUser functin called.")
+	log.Println("CreateUser called")
 	var body map[string]any
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
 
-	email := body["email"].(string)
-	first_name := body["firstName"].(string)
-	last_name := body["lastName"].(string)
-	student_id := body["studentEmail"].(string)
+	email, _ := body["email"].(string)
+	firstName, _ := body["firstName"].(string)
+	lastName, _ := body["lastName"].(string)
+	studentEmail, _ := body["studentEmail"].(string)
 
 	metamaskAddress, ok := r.Context().Value(middleware.MetamaskAddressKey).(string)
 	if !ok || metamaskAddress == "" {
@@ -29,113 +31,135 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := models.Users{
-		MetamaskAddress: metamaskAddress,
-		Email:           email,
-		FirstName:       first_name,
-		LastName:        last_name,
-		StudentEmail:    student_id,
+	// Block if this wallet already mapped to a university
+	var existingOrg models.Organization
+	if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&existingOrg).Error; err == nil && existingOrg.ID != 0 {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":        "account_conflict",
+			"message":      "Wallet already registered as a university. Use a different wallet to create a student account.",
+			"account_type": "university",
+		})
+		return
 	}
 
-	res := db.DB.Where("metamask_address = ?", metamaskAddress).First(&user)
+	// If a user already exists for this wallet, return it (idempotent)
+	var existingUser models.Users
+	err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&existingUser).Error
+	if err == nil {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"account_type": "student",
+			"user":         existingUser,
+			"authStatus": map[string]any{
+				"isAuthenticated": true,
+				"accountType":    "student",
+			},
+		})
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
 
-	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
-		user.IsVerified = true
-		var account models.Accounts
+	// Create user first
+	newUser := models.Users{
+		MetamaskAddress: metamaskAddress,
+		Email:           email,
+		FirstName:       firstName,
+		LastName:        lastName,
+		StudentEmail:    studentEmail,
+		IsVerified:      true,
+	}
+	if err := db.DB.Create(&newUser).Error; err != nil {
+		http.Error(w, "failed to create user", http.StatusInternalServerError)
+		return
+	}
 
-		if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&account).Error; err != nil {
-			log.Fatalf("account not found: %v", err)
-		}
-		fmt.Println("account before modification: ", account)
-
-		account.OwnerID = user.ID
-		account.OwnerType = "user"
-
-		fmt.Println("account after modification: ", account)
-		user.Account = account
-		if err := db.DB.Save(&account).Error; err != nil {
-			log.Fatalf("Failed to update account: %v", err)
-		}
-
-		createResult := db.DB.Create(&user)
-		
-		if createResult.Error != nil {
-			http.Error(w, "Failed to create account", http.StatusInternalServerError)
-			return
-		}
-
-
-	} else if res.Error != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+	// Update existing account to point to this user
+	var account models.Accounts
+	if err := db.DB.Where("metamask_address = ?", metamaskAddress).First(&account).Error; err != nil {
+		http.Error(w, "account not found for wallet", http.StatusInternalServerError)
+		return
+	}
+	account.OwnerID = newUser.ID
+	account.OwnerType = "user"
+	account.AccountType = "student"
+	if err := db.DB.Save(&account).Error; err != nil {
+		http.Error(w, "failed to update account", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"account_type": "student",
+		"user":         newUser,
+		"authStatus": map[string]any{
+			"isAuthenticated": true,
+			"accountType":    "student",
+		},
+	})
 }
 
 func ShowUser(w http.ResponseWriter, r *http.Request) {
 	metamaskAddress, ok := r.Context().Value(middleware.MetamaskAddressKey).(string)
 	if !ok || metamaskAddress == "" {
 		http.Error(w, "metamaskAddress is missing or invalid", http.StatusBadRequest)
+		return
 	}
 	log.Println("User logged in...")
 	var user models.Users
 	res := db.DB.Where("metamask_address = ?", metamaskAddress).First(&user)
-	if res.Error == gorm.ErrRecordNotFound {
+	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
 		return
 	} else if res.Error != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "database error", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"account_type": "student",
+		"user":         user,
+		"authStatus": map[string]any{
+			"isAuthenticated": true,
+			"accountType":    "student",
+		},
+	})
 }
 
 func AllUsers(w http.ResponseWriter, r *http.Request) {
-	var orgs []models.Users
-	result := db.DB.Limit(10).Find(&orgs)
+	var users []models.Users
+	result := db.DB.Limit(10).Find(&users)
 	if result.Error != nil {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
 		return
 	}
-	json.NewEncoder(w).Encode(orgs)
-	// for _, org := range orgs {
-	// 	fmt.Printf("Organization: %+v\n", org)
-	//
+	_ = json.NewEncoder(w).Encode(users)
 }
 
 func SearchUser(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
-	err := json.NewDecoder(r.Body).Decode(&body)
-	
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	address, ok := body["metamask_address"].(string)
-
 	if !ok || address == "" {
 		http.Error(w, "Invalid or missing metamask_address", http.StatusBadRequest)
 		return
 	}
-
 	var user models.Users
-
 	res := db.DB.Raw("SELECT * FROM users WHERE metamask_address = ?", address).Scan(&user)
-	
-	if res.Error == gorm.ErrRecordNotFound {
+	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "organization not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "user not found"})
 		return
 	} else if res.Error != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(user)
 }

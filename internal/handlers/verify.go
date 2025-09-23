@@ -19,7 +19,6 @@ import (
 	"github.com/adrg/strutil"
 	"github.com/adrg/strutil/metrics"
 	"google.golang.org/api/option"
-	"gorm.io/gorm"
 )
 
 func writeJSONResp(w http.ResponseWriter, status int, payload any) {
@@ -107,52 +106,99 @@ func VerifyDocument(w http.ResponseWriter, r *http.Request) {
 		writeJSONResp(w, http.StatusBadRequest, map[string]any{"status": "Bad_Request", "message": perr.Error()})
 		return
 	}
+	fmt.Println("GEMINI OUTPUT: ", pc)
+	
+	// Fetch possible matches. Prefer exact roll match, but also allow fuzzy fallback by name/university
+	var candidates []models.LegacyCredential
+	if strings.TrimSpace(pc.RegisterNumber) != "" {
+		_ = db.DB.Preload("University").Where("roll_number = ?", pc.RegisterNumber).Find(&candidates).Error
+	}
+	if len(candidates) == 0 {
+		// Fallback: try by partial name/university to aid matching
+		nameLike := "%" + strings.ToLower(strings.TrimSpace(pc.StudentName)) + "%"
+		uniLike := "%" + strings.ToLower(strings.TrimSpace(pc.UniversityName)) + "%"
+		_ = db.DB.Preload("University").Joins("JOIN organizations ON organizations.id = legacy_credentials.university_id").
+			Where("LOWER(legacy_credentials.student_name) LIKE ? OR LOWER(organizations.org_name) LIKE ?", nameLike, uniLike).
+			Limit(10).Find(&candidates).Error
+	}
 
-	// Lookup record by register/roll number (treat as roll_number here)
-	var rec models.LegacyCredential
-	err = db.DB.Preload("University").Where("roll_number = ?", pc.RegisterNumber).First(&rec).Error
-	if err == gorm.ErrRecordNotFound {
+	if len(candidates) == 0 {
 		writeJSONResp(w, http.StatusOK, map[string]any{
 			"status":  "Not_Found",
-			"message": "No matching record was found for the provided register number.",
+			"message": "No matching record was found for the provided details.",
 		})
-		return
-	} else if err != nil {
-		writeJSONResp(w, http.StatusInternalServerError, map[string]any{"status": "Server_Error", "message": "database error"})
 		return
 	}
 
-	official := strings.TrimSpace(rec.University.OrgName)
-	extracted := strings.TrimSpace(pc.UniversityName)
-
-	// Fuzzy compare with Jaro-Winkler
+	// Choose best candidate by combined similarity
 	metric := metrics.NewJaroWinkler()
-	conf := strutil.Similarity(strings.ToLower(extracted), strings.ToLower(official), metric)
+	bestIdx := -1
+	bestScore := -1.0
+	bestNameSim := 0.0
+	bestUniSim := 0.0
+	for i, rec := range candidates {
+		officialUni := strings.TrimSpace(rec.University.OrgName)
+		// Canonicalize university names to mitigate OCR typos and location suffixes
+		uniSim := strutil.Similarity(canonUniName(pc.UniversityName), canonUniName(officialUni), metric)
+		nameSim := strutil.Similarity(norm(pc.StudentName), norm(rec.StudentName), metric)
+		rollBonus := 0.0
+		if strings.EqualFold(strings.TrimSpace(pc.RegisterNumber), strings.TrimSpace(rec.RollNumber)) {
+			rollBonus = 0.10
+		}
+		score := 0.45*uniSim + 0.4*nameSim + rollBonus
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+			bestNameSim = nameSim
+			bestUniSim = uniSim
+		}
+	}
+
+	rec := candidates[bestIdx]
+	officialUni := strings.TrimSpace(rec.University.OrgName)
+	rollMatch := strings.EqualFold(strings.TrimSpace(pc.RegisterNumber), strings.TrimSpace(rec.RollNumber))
 
 	data := map[string]any{
-		"student_name_ocr":    pc.StudentName,
-		"register_number":     pc.RegisterNumber,
-		"course_name":         pc.CourseName,
-		"year_of_passing":     pc.YearOfPassing,
-		"university_name_ocr": extracted,
-		"official_university": official,
-		"record":              rec,
+		"student_name_ocr":        pc.StudentName,
+		"register_number":         pc.RegisterNumber,
+		"course_name":             pc.CourseName,
+		"year_of_passing":         pc.YearOfPassing,
+		"university_name_ocr":     strings.TrimSpace(pc.UniversityName),
+		"official_university":     officialUni,
+		"official_student_name":   rec.StudentName,
+		"record":                  rec,
+		"name_confidence":         bestNameSim,
+		"university_confidence":   bestUniSim,
+		"roll_number_exact_match": rollMatch,
 	}
 
-	if conf >= 0.85 {
+	// Adaptive verification policy (A):
+	// - Strict: roll exact + name >= 0.95 + university >= 0.90
+	// - Adaptive: if roll exact + name >= 0.98, accept university >= 0.88
+	strictName := bestNameSim >= 0.95
+	strictUni := bestUniSim >= 0.90
+	veryHighName := bestNameSim >= 0.98
+	adaptiveUni := bestUniSim >= 0.88
+	if rollMatch && ((strictName && strictUni) || (veryHighName && adaptiveUni)) {
 		writeJSONResp(w, http.StatusOK, map[string]any{
-			"status":           "Verified",
-			"match_confidence": conf,
-			"data":             data,
+			"status":             "Verified",
+			"overall_confidence": bestScore,
+			"data":               data,
 		})
 		return
 	}
 
+	// Explain exactly what failed
+	reasons := []string{}
+	if !rollMatch { reasons = append(reasons, "Roll number does not match the official record") }
+	if !(strictName || veryHighName) { reasons = append(reasons, "Student name does not closely match the official record") }
+	if !(strictUni || (veryHighName && adaptiveUni)) { reasons = append(reasons, "Institution name does not closely match the official record") }
+
 	writeJSONResp(w, http.StatusOK, map[string]any{
-		"status":           "Potentially_Tampered",
-		"match_confidence": conf,
-		"message":          "The institution name on the document does not match the official record.",
-		"data":             data,
+		"status":             "Potentially_Tampered",
+		"overall_confidence": bestScore,
+		"message":            strings.Join(reasons, "; "),
+		"data":               data,
 	})
 }
 
@@ -195,4 +241,47 @@ func parseCertificateText(raw string) (studentName, rollNumber, universityName s
 	}
 	universityName = best
 	return
+}
+
+// norm collapses spaces, removes punctuation, and lowercases for robust comparisons
+func norm(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	// Replace common punctuation with space
+	replacer := strings.NewReplacer(".", " ", ",", " ", "-", " ", "_", " ", "'", " ", "\"", " ")
+	s = replacer.Replace(s)
+	// Collapse multiple spaces
+	parts := strings.Fields(s)
+	return strings.Join(parts, " ")
+}
+
+// canonUniName normalizes and fixes common OCR typos, and removes location suffixes/campus markers (C)
+func canonUniName(s string) string {
+	n := norm(s)
+	// Fix frequent OCR/typo variants
+	repls := map[string]string{
+		"tichology": "technology",
+		"techology": "technology",
+		"technolgy": "technology",
+		"institue":  "institute",
+		"instittute": "institute",
+		"inistute":  "institute",
+	}
+	for from, to := range repls {
+		n = strings.ReplaceAll(n, from, to)
+	}
+	// Remove common location/campus words
+	stops := map[string]struct{}{
+		"mesra": {},
+		"ranchi": {},
+		"jharkhand": {},
+		"india": {},
+		"campus": {},
+	}
+	toks := strings.Fields(n)
+	keep := make([]string, 0, len(toks))
+	for _, t := range toks {
+		if _, blocked := stops[t]; blocked { continue }
+		keep = append(keep, t)
+	}
+	return strings.Join(keep, " ")
 }

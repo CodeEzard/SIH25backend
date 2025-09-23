@@ -40,6 +40,9 @@ func RegisterRouter() http.Handler {
 	// Public verify data (token required via query param)
 	r.Get("/api/v1/credential-info/{id}", handlers.GetCredentialInfo)
 
+	// New: Privy login (public)
+	r.Post("/api/v1/auth/privy-login", handlers.PrivyLogin)
+
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthMiddleware)
 		r.Post("/api/create/user", handlers.CreateUser)
