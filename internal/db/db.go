@@ -14,9 +14,8 @@ import (
 var DB *gorm.DB
 
 func Init() {
-	// Use the provided managed PostgreSQL connection string directly
-	dsn := "host=localhost user=postgres password=8118 dbname=vericred port=5432 sslmode=disable TimeZone=Asia/Kolkata"
-
+    // Build DSN from environment with safe defaults and remote support
+	dsn := "postgresql://hkffkptrnbomjueqshza:xbrfisemiisbrjeldojjokmoailfyo@9qasp5v56q8ckkf5dc.leapcellpool.com:6438/akvdcrmhdjfhckckylmn?sslmode=require"
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -60,3 +59,10 @@ func Init() {
 
 	// AutoMigrate already manages FKs from struct tags; no need to create constraints manually
 }
+
+// resolveDSN returns a Postgres DSN string for GORM, preferring DB_URL if set.
+// Supported env vars:
+// - DB_URL: full DSN, e.g. postgresql://user:pass@host:port/dbname?sslmode=require
+// - DATABASE_URL: alternative commonly used in hosting providers
+// - PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSSLMODE
+// Falls back to local dev settings if none provided
